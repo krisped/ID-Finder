@@ -9,8 +9,16 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
-import java.util.ArrayList;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import org.json.JSONObject;
+import java.text.DecimalFormat;
 
 public class ItemPanel extends PluginPanel
 {
@@ -20,6 +28,10 @@ public class ItemPanel extends PluginPanel
     private final JScrollPane resultsScrollPane;
     private final ItemManager itemManager;
     private final ClientThread clientThread;
+
+    // Cache for raskere oppslag
+    private final Map<Integer, String> priceCache = new HashMap<>();
+    private static final int NATURE_RUNE_PRICE = 200; // Antatt pris for en nature rune (kan gjøres dynamisk)
 
     public ItemPanel(FinderMainPanel parentPanel, ItemManager itemManager, ClientThread clientThread)
     {
@@ -56,14 +68,14 @@ public class ItemPanel extends PluginPanel
 
         searchPanel.add(searchField, BorderLayout.CENTER);
 
-        // Resultatboks (egen boks)
+        // Resultatboks
         resultsPanel = new JPanel();
         resultsPanel.setLayout(new GridLayout(0, 1));
         resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results"));
 
         resultsScrollPane = new JScrollPane(resultsPanel);
         resultsScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
-        resultsScrollPane.setPreferredSize(new Dimension(300, 500)); // Økt høyde på søkeresultater
+        resultsScrollPane.setPreferredSize(new Dimension(300, 500));
 
         // Tilbake-knapp
         JButton backButton = new JButton("Back to Home");
@@ -120,19 +132,18 @@ public class ItemPanel extends PluginPanel
 
         for (ItemComposition item : items)
         {
-            JPanel itemPanel = new JPanel();
-            itemPanel.setLayout(new BorderLayout());
+            JPanel itemPanel = new JPanel(new BorderLayout());
             itemPanel.setBorder(BorderFactory.createLineBorder(Color.GRAY));
-            itemPanel.setPreferredSize(new Dimension(280, 90)); // Større søkeresultater
-            itemPanel.setBackground(Color.DARK_GRAY); // Bakgrunnsfarge
+            itemPanel.setPreferredSize(new Dimension(280, 90));
+            itemPanel.setBackground(Color.DARK_GRAY);
 
-            // Hover-effekt
+            // Lett hover-effekt
             itemPanel.addMouseListener(new MouseAdapter()
             {
                 @Override
                 public void mouseEntered(MouseEvent e)
                 {
-                    itemPanel.setBackground(Color.LIGHT_GRAY);
+                    itemPanel.setBackground(new Color(50, 50, 50));
                 }
 
                 @Override
@@ -144,23 +155,41 @@ public class ItemPanel extends PluginPanel
 
             BufferedImage itemImage = itemManager.getImage(item.getId());
             JLabel imageLabel = new JLabel(new ImageIcon(itemImage));
+            imageLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
 
-            // Navn + ID + Type + Pris
             JLabel nameLabel = new JLabel(item.getName());
-            JLabel idLabel = new JLabel("(ID " + item.getId() + ")");
+            nameLabel.setFont(new Font("Arial", Font.BOLD, 14));
+            nameLabel.setForeground(Color.WHITE);
+            nameLabel.setBorder(BorderFactory.createEmptyBorder(3, 0, 0, 0));
+
+            JLabel idLabel = new JLabel("(ID: " + item.getId() + ")");
+            idLabel.setFont(new Font("Arial", Font.BOLD, 13));
+            idLabel.setForeground(Color.LIGHT_GRAY);
+
             JLabel typeLabel = new JLabel("Type: " + getItemType(item));
-            JLabel priceLabel = new JLabel(getItemPrices(item.getId())); // Henter pris
+            typeLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+            typeLabel.setForeground(Color.LIGHT_GRAY);
+            typeLabel.setBorder(BorderFactory.createEmptyBorder(5, 0, 0, 0));
 
-            nameLabel.setFont(new Font("Arial", Font.BOLD, 16));
-            idLabel.setFont(new Font("Arial", Font.PLAIN, 14));
-            typeLabel.setFont(new Font("Arial", Font.ITALIC, 12));
-            priceLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+            JPanel textPanel = new JPanel();
+            textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
+            textPanel.setOpaque(false);
 
-            JPanel textPanel = new JPanel(new GridLayout(4, 1));
             textPanel.add(nameLabel);
             textPanel.add(idLabel);
             textPanel.add(typeLabel);
-            textPanel.add(priceLabel);
+
+            // Vis pris bare for Normal items
+            if (isNormalItem(item))
+            {
+                JLabel priceLabel = new JLabel("Loading price...");
+                priceLabel.setFont(new Font("Arial", Font.BOLD, 12));
+                priceLabel.setForeground(Color.WHITE);
+                priceLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 3, 0));
+                textPanel.add(Box.createVerticalGlue()); // For å plassere pris i bunnen
+                textPanel.add(priceLabel);
+                fetchPriceAsync(item.getId(), priceLabel, item.getPrice());
+            }
 
             itemPanel.add(imageLabel, BorderLayout.WEST);
             itemPanel.add(textPanel, BorderLayout.CENTER);
@@ -172,53 +201,106 @@ public class ItemPanel extends PluginPanel
         resultsPanel.repaint();
     }
 
-    private String getItemType(ItemComposition item)
+    private boolean isNormalItem(ItemComposition item)
     {
-        if (item.getNote() != -1)
+        return item.getNote() == -1 && item.getPlaceholderTemplateId() == -1;
+    }
+
+    private void fetchPriceAsync(int itemId, JLabel priceLabel, int storePrice)
+    {
+        if (priceCache.containsKey(itemId))
         {
-            return "Noted";
+            priceLabel.setText(priceCache.get(itemId));
+            return;
         }
-        else if (item.getPlaceholderTemplateId() != -1)
+
+        SwingWorker<String, Void> worker = new SwingWorker<>()
         {
-            return "Placeholder";
+            @Override
+            protected String doInBackground() throws Exception
+            {
+                return getItemPrices(itemId, storePrice);
+            }
+
+            @Override
+            protected void done()
+            {
+                try
+                {
+                    String priceText = get();
+                    priceCache.put(itemId, priceText);
+                    priceLabel.setText(priceText);
+                }
+                catch (Exception ignored) {}
+            }
+        };
+        worker.execute();
+    }
+
+    private String getItemPrices(int itemId, int storePrice)
+    {
+        try
+        {
+            URL url = new URL("https://prices.runescape.wiki/api/v1/osrs/latest");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            StringBuilder response = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null)
+            {
+                response.append(line);
+            }
+            reader.close();
+
+            JSONObject json = new JSONObject(response.toString());
+            JSONObject data = json.getJSONObject("data");
+
+            if (!data.has(String.valueOf(itemId)))
+            {
+                return "G/E: N/A | HA: " + formatHighAlch(storePrice);
+            }
+
+            JSONObject itemData = data.getJSONObject(String.valueOf(itemId));
+            int gePrice = itemData.optInt("high", -1);
+
+            return "G/E: " + formatPrice(gePrice) + " | HA: " + formatHighAlch(storePrice);
         }
-        else
+        catch (Exception e)
         {
-            return "Normal";
+            return "G/E: N/A | HA: " + formatHighAlch(storePrice);
         }
     }
 
-    private String getItemPrices(int itemId)
+    private String formatHighAlch(int storePrice)
     {
-        // Simulert metode for henting av priser fra OSRS Wiki API
-        int gePrice = getGEPrice(itemId);
-        int highAlch = getHighAlchPrice(itemId);
-
-        return "GE Price: " + formatPrice(gePrice) + " | High Alch: " + formatPrice(highAlch);
-    }
-
-    private int getGEPrice(int itemId)
-    {
-        // Simulert API-kall, erstatt med faktisk OSRS Wiki API-integrasjon
-        return (int) (Math.random() * 100000);
-    }
-
-    private int getHighAlchPrice(int itemId)
-    {
-        // Simulert API-kall, erstatt med faktisk OSRS Wiki API-integrasjon
-        return (int) (Math.random() * 50000);
+        if (storePrice <= 0) return "N/A";
+        return new DecimalFormat("###,###,###").format((int) (storePrice * 0.6));
     }
 
     private String formatPrice(int price)
     {
+        if (price <= 0) return "N/A";
+
+        DecimalFormat df = new DecimalFormat("#,###.#");
+
         if (price >= 1_000_000)
         {
-            return (price / 1_000_000) + "M";
+            return df.format(price / 1_000_000.0) + "M";
         }
         else if (price >= 1_000)
         {
-            return (price / 1_000) + "K";
+            return df.format(price / 1_000.0) + "K";
         }
-        return String.valueOf(price);
+
+        return df.format(price);
+    }
+
+    private String getItemType(ItemComposition item)
+    {
+        if (item.getNote() != -1) return "Noted";
+        if (item.getPlaceholderTemplateId() != -1) return "Placeholder";
+        return "Normal";
     }
 }
