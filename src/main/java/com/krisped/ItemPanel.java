@@ -8,6 +8,8 @@ import net.runelite.api.InventoryID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.PluginPanel;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import javax.swing.*;
 import java.awt.*;
@@ -16,11 +18,10 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-
-import org.json.JSONObject;
-import org.json.JSONArray;
+import java.util.Map;
 
 public class ItemPanel extends PluginPanel {
     private final FinderMainPanel parentPanel;
@@ -35,8 +36,10 @@ public class ItemPanel extends PluginPanel {
     // Lagrer de siste søkeresultatene for re-sortering
     private List<ItemComposition> currentItems = new ArrayList<>();
 
-    private final Map<Integer, Integer> alchPriceCache = new HashMap<>();
-    private final Map<Integer, Integer> gePriceCache = new HashMap<>();
+    private final Map<Integer, Integer> alchPriceCache = new LinkedHashMap<>();
+    private final Map<Integer, Integer> gePriceCache = new LinkedHashMap<>();
+    private final Map<Integer, Integer> day30PriceCache = new LinkedHashMap<>();
+    private final Map<Integer, Integer> volumeCache = new LinkedHashMap<>();
 
     public ItemPanel(FinderMainPanel parentPanel, ItemManager itemManager, ClientThread clientThread, Client client) {
         this.parentPanel = parentPanel;
@@ -50,17 +53,14 @@ public class ItemPanel extends PluginPanel {
         JPanel topPanel = new JPanel();
         topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
 
-        // Overskrift med ekstra padding (mer luft mellom overskrift og søkeboks)
         JLabel headerLabel = new JLabel("Item Database");
         headerLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         headerLabel.setFont(new Font("Arial", Font.BOLD, 18));
         headerLabel.setBorder(BorderFactory.createEmptyBorder(10, 0, 20, 0));
         topPanel.add(headerLabel);
 
-        // Søketekstboks – større for bedre synlighet
         searchField = new JTextField("Search for item or ID...");
         searchField.setPreferredSize(new Dimension(300, 30));
-        // Fjern placeholder-tekst ved fokus
         searchField.addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
@@ -73,7 +73,6 @@ public class ItemPanel extends PluginPanel {
                     searchField.setText("Search for item or ID...");
             }
         });
-        // Ekstra MouseListener slik at placeholder forsvinner ved klikk
         searchField.addMouseListener(new MouseAdapter(){
             @Override
             public void mousePressed(MouseEvent e) {
@@ -86,7 +85,6 @@ public class ItemPanel extends PluginPanel {
         searchFieldPanel.add(searchField, BorderLayout.CENTER);
         topPanel.add(searchFieldPanel);
 
-        // Filter for sortering
         filterCombo = new JComboBox<>(new String[]{
                 "Sort by: None",
                 "Price: High to Low",
@@ -104,7 +102,6 @@ public class ItemPanel extends PluginPanel {
         filterPanel.add(filterCombo);
         topPanel.add(filterPanel);
 
-        // Ved filter-endring sorteres de nåværende resultatene med en gang
         filterCombo.addActionListener(e -> {
             if (!currentItems.isEmpty()) {
                 updateResults(currentItems);
@@ -113,7 +110,6 @@ public class ItemPanel extends PluginPanel {
 
         add(topPanel, BorderLayout.NORTH);
 
-        // Resultat-panelet med tittel som viser totalt antall resultater
         resultsPanel = new JPanel();
         resultsPanel.setLayout(new GridLayout(0, 1));
         resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (0)"));
@@ -122,11 +118,8 @@ public class ItemPanel extends PluginPanel {
         resultsScrollPane.setPreferredSize(new Dimension(300, 500));
         add(resultsScrollPane, BorderLayout.CENTER);
 
-        // Nederre panel: Knappene plassert vertikalt over "Back to Home"
         JPanel bottomPanel = new JPanel();
         bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
-
-        // Knapp-panel med vertikal ordning (knappene er litt tynnere og plassert over hverandre)
         JPanel buttonsPanel = new JPanel();
         buttonsPanel.setLayout(new BoxLayout(buttonsPanel, BoxLayout.Y_AXIS));
         buttonsPanel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -137,6 +130,8 @@ public class ItemPanel extends PluginPanel {
         inventoryButton.setPreferredSize(btnSize);
         bankButton.setMaximumSize(btnSize);
         bankButton.setPreferredSize(btnSize);
+        inventoryButton.setFont(new Font("Arial", Font.PLAIN, 14));
+        bankButton.setFont(new Font("Arial", Font.PLAIN, 14));
         inventoryButton.setAlignmentX(Component.CENTER_ALIGNMENT);
         bankButton.setAlignmentX(Component.CENTER_ALIGNMENT);
         inventoryButton.addActionListener(e -> getInventoryItems());
@@ -144,20 +139,16 @@ public class ItemPanel extends PluginPanel {
         buttonsPanel.add(inventoryButton);
         buttonsPanel.add(Box.createVerticalStrut(5));
         buttonsPanel.add(bankButton);
-        // Litt ekstra padding fra søkefeltet
         bottomPanel.add(Box.createVerticalStrut(10));
         bottomPanel.add(buttonsPanel);
         bottomPanel.add(Box.createVerticalStrut(10));
-
-        // Tilbake-knapp
         JButton backButton = new JButton("Back to Home");
         backButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+        backButton.setFont(new Font("Arial", Font.PLAIN, 14));
         backButton.addActionListener(e -> parentPanel.showHomePanel());
         bottomPanel.add(backButton);
-
         add(bottomPanel, BorderLayout.SOUTH);
 
-        // Søket trigges ved Enter
         searchField.addKeyListener(new KeyAdapter(){
             @Override
             public void keyPressed(KeyEvent e){
@@ -166,7 +157,6 @@ public class ItemPanel extends PluginPanel {
             }
         });
 
-        // Last prisdata ved oppstart
         loadHighAlchPrices();
         loadGEPrices();
     }
@@ -199,7 +189,6 @@ public class ItemPanel extends PluginPanel {
         });
     }
 
-    // Søket utføres ved Enter
     private void searchItems(){
         String query = searchField.getText().trim().toLowerCase();
         if(query.isEmpty() || itemManager == null)
@@ -215,10 +204,8 @@ public class ItemPanel extends PluginPanel {
         });
     }
 
-    // Oppdaterer søkeresultatene – sorterer etter valgt filter og oppdaterer totalt antall
     private void updateResults(List<ItemComposition> items) {
         currentItems = new ArrayList<>(items);
-
         String selectedSort = (String) filterCombo.getSelectedItem();
         if(selectedSort != null) {
             switch(selectedSort) {
@@ -279,11 +266,7 @@ public class ItemPanel extends PluginPanel {
                 public void mouseExited(MouseEvent e){
                     itemPanel.setBackground(Color.DARK_GRAY);
                 }
-                @Override
-                public void mouseClicked(MouseEvent e) {
-                    // Bytt side i sidepanelet til detaljert item-info.
-                    parentPanel.showItemInfoPanel(new ItemInfoPanel(item.getName(), item.getId(), itemManager, parentPanel));
-                }
+                // Fjernet mouseClicked-hendelsen som tidligere åpnet ItemInfoPanel
             });
 
             Image image = itemManager.getImage(item.getId());
@@ -337,8 +320,6 @@ public class ItemPanel extends PluginPanel {
         resultsPanel.repaint();
         resultsScrollPane.getViewport().revalidate();
         resultsScrollPane.getViewport().repaint();
-        this.revalidate();
-        this.repaint();
     }
 
     private String getItemPrices(int itemId, ItemComposition item) {
@@ -373,7 +354,11 @@ public class ItemPanel extends PluginPanel {
             JSONObject data = new JSONObject(reader.readLine()).getJSONObject("data");
             reader.close();
             for (String key : data.keySet()) {
-                gePriceCache.put(Integer.parseInt(key), data.getJSONObject(key).optInt("high", -1));
+                int id = Integer.parseInt(key);
+                JSONObject obj = data.getJSONObject(key);
+                gePriceCache.put(id, obj.optInt("high", -1));
+                day30PriceCache.put(id, obj.optInt("day30", -1));
+                volumeCache.put(id, obj.optInt("volume", -1));
             }
         } catch (Exception ignored) {}
     }
@@ -381,5 +366,5 @@ public class ItemPanel extends PluginPanel {
     private boolean isNotedItem(ItemComposition item) { return item.getNote() != -1; }
     private boolean isPlaceholderItem(ItemComposition item) { return item.getPlaceholderTemplateId() != -1; }
     private String getItemType(ItemComposition item) { return isNotedItem(item) ? "Noted" : "Normal"; }
-    private String formatPrice(int price) { return price <= 0 ? "N/A" : String.format("%,d", price); }
+    private String formatPrice(int price) { return price <= 0 ? "N/A" : String.format("%,d gp", price); }
 }
