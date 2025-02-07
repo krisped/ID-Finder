@@ -43,7 +43,7 @@ public class FinderPlugin extends Plugin
     @Override
     protected void startUp() throws Exception
     {
-        mainPanel = new FinderMainPanel(this, itemManager, clientThread);
+        mainPanel = new FinderMainPanel(this, itemManager, clientThread, client);
 
         BufferedImage icon = loadIcon();
 
