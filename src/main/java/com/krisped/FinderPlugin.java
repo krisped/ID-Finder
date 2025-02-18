@@ -19,7 +19,7 @@ import net.runelite.client.ui.NavigationButton;
 
 @Slf4j
 @PluginDescriptor(
-        name = "Finder Plugin",
+        name = "[KP] ID Database",
         description = "A simple RuneLite plugin with a side panel",
         tags = {"finder", "database", "items", "sprites"}
 )
