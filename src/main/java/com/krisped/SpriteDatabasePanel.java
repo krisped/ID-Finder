@@ -7,6 +7,7 @@ import net.runelite.client.game.SpriteManager;
 import net.runelite.client.ui.PluginPanel;
 
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.*;
 import java.lang.reflect.Field;
@@ -95,7 +96,6 @@ public class SpriteDatabasePanel extends PluginPanel
 
         // 2) Midtdel: resultatpanel i en scroll
         resultsPanel = new JPanel();
-        // Bruk for eksempel BoxLayout og la hver “rad” få fast høyde
         resultsPanel.setLayout(new BoxLayout(resultsPanel, BoxLayout.Y_AXIS));
         resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (0)"));
 
@@ -142,48 +142,57 @@ public class SpriteDatabasePanel extends PluginPanel
 
     /**
      * Kjører søk basert på innholdet i søkefeltet.
+     * Hvis søkefeltet er tomt, vises alle sprite-IDer.
      */
     private void searchSprites()
     {
         String text = searchField.getText().trim().toLowerCase();
+        List<Integer> matches = new ArrayList<>();
+
+        // Om søkefeltet er tomt, legg til alle sprite-IDer
         if (text.isEmpty() || text.equals("search for sprite id or name..."))
         {
-            return;
+            matches.addAll(spriteMap.keySet());
         }
-
-        // Finn matcher
-        List<Integer> matches = new ArrayList<>();
-        for (Map.Entry<Integer, String> entry : spriteMap.entrySet())
+        else
         {
-            int spriteId = entry.getKey();
-            String spriteName = entry.getValue().toLowerCase();
-
-            if (spriteName.contains(text) || String.valueOf(spriteId).contains(text))
+            // Finn matcher basert på tekst
+            for (Map.Entry<Integer, String> entry : spriteMap.entrySet())
             {
-                matches.add(spriteId);
+                int spriteId = entry.getKey();
+                String spriteName = entry.getValue().toLowerCase();
+
+                if (spriteName.contains(text) || String.valueOf(spriteId).contains(text))
+                {
+                    matches.add(spriteId);
+                }
             }
         }
-
         updateResults(matches);
     }
 
     /**
      * Viser radene for hver sprite som ble funnet.
+     * Dersom navnet er veldig langt, justeres bredden på raden dynamisk.
      */
     private void updateResults(List<Integer> spriteIds)
     {
         resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (" + spriteIds.size() + ")"));
         resultsPanel.removeAll();
 
+        // Standard minimum bredde for en rad
+        final int minWidth = 280;
+        // Fast høyde for hver rad
+        final int rowHeight = 60;
+        // Bredde for ikonet og padding
+        final int iconAreaWidth = 48 + 20; // 48 for ikonet og 20 for padding
+
         for (Integer spriteId : spriteIds)
         {
-            // Hver rad er f.eks. 60 px høy, så det ikke tar all plass
+            // Opprett radpanel
             JPanel rowPanel = new JPanel(new BorderLayout());
-            rowPanel.setPreferredSize(new Dimension(280, 60));
-            rowPanel.setMaximumSize(new Dimension(Short.MAX_VALUE, 60));
             rowPanel.setBackground(Color.DARK_GRAY);
             rowPanel.setBorder(BorderFactory.createLineBorder(Color.GRAY));
-
             rowPanel.addMouseListener(new MouseAdapter()
             {
                 @Override
@@ -199,12 +208,12 @@ public class SpriteDatabasePanel extends PluginPanel
                 }
             });
 
-            // Ikon til venstre
+            // Ikon med padding
             JLabel iconLabel = new JLabel();
-            iconLabel.setPreferredSize(new Dimension(48, 48)); // Liten sprite
+            iconLabel.setPreferredSize(new Dimension(48, 48));
             iconLabel.setOpaque(false);
+            iconLabel.setBorder(new EmptyBorder(0, 10, 0, 0)); // 10px venstre padding
 
-            // Bruk getSpriteAsync for å være sikker på at spriten lastes
             spriteManager.getSpriteAsync(spriteId, 0, (img) ->
             {
                 if (img != null)
@@ -217,9 +226,10 @@ public class SpriteDatabasePanel extends PluginPanel
                 }
             });
 
-            // Tekst: Navn øverst, ID under
-            JLabel nameLabel = new JLabel(spriteMap.get(spriteId));
-            nameLabel.setFont(new Font("Arial", Font.BOLD, 14));
+            // Tekst: Navn og ID
+            String spriteName = spriteMap.get(spriteId);
+            JLabel nameLabel = new JLabel(spriteName);
+            nameLabel.setFont(new Font("Arial", Font.BOLD, 12));
             nameLabel.setForeground(Color.WHITE);
 
             JLabel idLabel = new JLabel("ID: " + spriteId);
@@ -229,22 +239,27 @@ public class SpriteDatabasePanel extends PluginPanel
             JPanel textPanel = new JPanel();
             textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
             textPanel.setOpaque(false);
-
             textPanel.add(nameLabel);
             textPanel.add(idLabel);
 
-            // Legg ikonet til venstre, tekst til høyre
+            // Beregn nødvendig bredde for raden basert på navnets bredde
+            FontMetrics fm = nameLabel.getFontMetrics(nameLabel.getFont());
+            int nameWidth = fm.stringWidth(spriteName);
+            int desiredWidth = iconAreaWidth + nameWidth + 20; // 20 piksler ekstra margin
+            int rowWidth = Math.max(minWidth, desiredWidth);
+
+            rowPanel.setPreferredSize(new Dimension(rowWidth, rowHeight));
+            rowPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, rowHeight));
+
+            // Legg til komponenter i raden
             rowPanel.add(iconLabel, BorderLayout.WEST);
             rowPanel.add(textPanel, BorderLayout.CENTER);
 
-            // Legg til i resultsPanel
+            // Legg raden til resultatpanelet
             resultsPanel.add(rowPanel);
-
-            // Litt ekstra luft mellom radene (valgfritt):
             resultsPanel.add(Box.createVerticalStrut(5));
         }
 
-        // Oppdater GUI
         resultsPanel.revalidate();
         resultsPanel.repaint();
         resultsScrollPane.revalidate();

@@ -10,13 +10,19 @@ import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.PluginPanel;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URLEncoder;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,6 +46,9 @@ public class ItemPanel extends PluginPanel {
     private final Map<Integer, Integer> gePriceCache = new LinkedHashMap<>();
     private final Map<Integer, Integer> day30PriceCache = new LinkedHashMap<>();
     private final Map<Integer, Integer> volumeCache = new LinkedHashMap<>();
+
+    // Enkel cache for wiki-extrainfo
+    private final Map<String, String> wikiInfoCache = new LinkedHashMap<>();
 
     public ItemPanel(FinderMainPanel parentPanel, ItemManager itemManager, ClientThread clientThread, Client client) {
         this.parentPanel = parentPanel;
@@ -118,33 +127,47 @@ public class ItemPanel extends PluginPanel {
         resultsScrollPane.setPreferredSize(new Dimension(300, 500));
         add(resultsScrollPane, BorderLayout.CENTER);
 
+        // Bottom panel: Inneholder knappene
         JPanel bottomPanel = new JPanel();
         bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
+        bottomPanel.setAlignmentX(Component.CENTER_ALIGNMENT);
         JPanel buttonsPanel = new JPanel();
         buttonsPanel.setLayout(new BoxLayout(buttonsPanel, BoxLayout.Y_AXIS));
         buttonsPanel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        JButton inventoryButton = new JButton("Get Inventory Items");
-        JButton bankButton = new JButton("Get Bank Items");
         Dimension btnSize = new Dimension(150, 30);
+
+        JButton inventoryButton = new JButton("Get Inventory Items");
+        inventoryButton.setFont(new Font("Arial", Font.PLAIN, 12));
         inventoryButton.setMaximumSize(btnSize);
         inventoryButton.setPreferredSize(btnSize);
+        inventoryButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+        inventoryButton.addActionListener(e -> getInventoryItems());
+
+        JButton equipmentButton = new JButton("Get Equipment Items");
+        equipmentButton.setFont(new Font("Arial", Font.PLAIN, 12));
+        equipmentButton.setMaximumSize(btnSize);
+        equipmentButton.setPreferredSize(btnSize);
+        equipmentButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+        equipmentButton.addActionListener(e -> getEquipmentItems());
+
+        JButton bankButton = new JButton("Get Bank Items");
+        bankButton.setFont(new Font("Arial", Font.PLAIN, 12));
         bankButton.setMaximumSize(btnSize);
         bankButton.setPreferredSize(btnSize);
-        inventoryButton.setFont(new Font("Arial", Font.PLAIN, 14));
-        bankButton.setFont(new Font("Arial", Font.PLAIN, 14));
-        inventoryButton.setAlignmentX(Component.CENTER_ALIGNMENT);
         bankButton.setAlignmentX(Component.CENTER_ALIGNMENT);
-        inventoryButton.addActionListener(e -> getInventoryItems());
         bankButton.addActionListener(e -> getBankItems());
-        buttonsPanel.add(inventoryButton);
+
+        buttonsPanel.add(wrapButton(inventoryButton));
         buttonsPanel.add(Box.createVerticalStrut(5));
-        buttonsPanel.add(bankButton);
+        buttonsPanel.add(wrapButton(equipmentButton));
+        buttonsPanel.add(Box.createVerticalStrut(5));
+        buttonsPanel.add(wrapButton(bankButton));
         bottomPanel.add(Box.createVerticalStrut(10));
         bottomPanel.add(buttonsPanel);
         bottomPanel.add(Box.createVerticalStrut(10));
         JButton backButton = new JButton("Back to Home");
         backButton.setAlignmentX(Component.CENTER_ALIGNMENT);
-        backButton.setFont(new Font("Arial", Font.PLAIN, 14));
+        backButton.setFont(new Font("Arial", Font.PLAIN, 12));
         backButton.addActionListener(e -> parentPanel.showHomePanel());
         bottomPanel.add(backButton);
         add(bottomPanel, BorderLayout.SOUTH);
@@ -168,6 +191,20 @@ public class ItemPanel extends PluginPanel {
                 return;
             List<ItemComposition> items = new ArrayList<>();
             for (Item item : inventory.getItems()) {
+                if (item.getId() > 0)
+                    items.add(itemManager.getItemComposition(item.getId()));
+            }
+            SwingUtilities.invokeLater(() -> updateResults(items));
+        });
+    }
+
+    private void getEquipmentItems() {
+        clientThread.invokeLater(() -> {
+            ItemContainer equipment = client.getItemContainer(InventoryID.EQUIPMENT);
+            if (equipment == null)
+                return;
+            List<ItemComposition> items = new ArrayList<>();
+            for (Item item : equipment.getItems()) {
                 if (item.getId() > 0)
                     items.add(itemManager.getItemComposition(item.getId()));
             }
@@ -204,8 +241,15 @@ public class ItemPanel extends PluginPanel {
         });
     }
 
+    /**
+     * Oppdaterer søkeresultatene.
+     * Her grupperes like items slik at for eksempel 20 Shark vises som "Shark (x20)",
+     * totalt antall items vises også i tittelen.
+     * I tillegg vises en ekstra linje med info hentet fra OSRS Wiki om itemet.
+     */
     private void updateResults(List<ItemComposition> items) {
         currentItems = new ArrayList<>(items);
+        // Sortering basert på valgt filter
         String selectedSort = (String) filterCombo.getSelectedItem();
         if(selectedSort != null) {
             switch(selectedSort) {
@@ -250,51 +294,100 @@ public class ItemPanel extends PluginPanel {
             }
         }
 
-        resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (" + currentItems.size() + ")"));
-        resultsPanel.removeAll();
+        // Gruppér items basert på ID
+        Map<Integer, Integer> countMap = new LinkedHashMap<>();
+        Map<Integer, ItemComposition> compMap = new LinkedHashMap<>();
         for (ItemComposition item : currentItems) {
+            int id = item.getId();
+            countMap.put(id, countMap.getOrDefault(id, 0) + 1);
+            if (!compMap.containsKey(id)) {
+                compMap.put(id, item);
+            }
+        }
+        // Beregn totalt antall items (inkludert duplikater)
+        int totalCount = 0;
+        for (Integer count : countMap.values()) {
+            totalCount += count;
+        }
+        resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (" + totalCount + ")"));
+        resultsPanel.removeAll();
+
+        // For hver gruppe opprettes en rad
+        for (Map.Entry<Integer, ItemComposition> entry : compMap.entrySet()) {
+            int itemId = entry.getKey();
+            ItemComposition item = entry.getValue();
+            int count = countMap.get(itemId);
+
             JPanel itemPanel = new JPanel(new BorderLayout());
             itemPanel.setBorder(BorderFactory.createLineBorder(Color.GRAY));
-            itemPanel.setPreferredSize(new Dimension(280, 100));
+            itemPanel.setPreferredSize(new Dimension(280, 85));
             itemPanel.setBackground(Color.DARK_GRAY);
-            itemPanel.addMouseListener(new MouseAdapter(){
-                @Override
-                public void mouseEntered(MouseEvent e){
-                    itemPanel.setBackground(new Color(50,50,50));
-                }
-                @Override
-                public void mouseExited(MouseEvent e){
-                    itemPanel.setBackground(Color.DARK_GRAY);
-                }
-                // Fjernet mouseClicked-hendelsen som tidligere åpnet ItemInfoPanel
-            });
 
-            Image image = itemManager.getImage(item.getId());
+            // Ekstra venstrepadding for bildet
             JLabel imageLabel = new JLabel();
-            if (image != null) {
-                ImageIcon icon = new ImageIcon(image);
-                imageLabel.setIcon(icon);
-                imageLabel.revalidate();
-                imageLabel.repaint();
-            }
-            imageLabel.setDoubleBuffered(true);
+            imageLabel.setBorder(new EmptyBorder(0, 10, 0, 0));
+            new SwingWorker<ImageIcon, Void>() {
+                @Override
+                protected ImageIcon doInBackground() throws Exception {
+                    Image image = itemManager.getImage(item.getId());
+                    return image != null ? new ImageIcon(image) : null;
+                }
+                @Override
+                protected void done() {
+                    try {
+                        ImageIcon icon = get();
+                        if (icon != null) {
+                            imageLabel.setIcon(icon);
+                            imageLabel.revalidate();
+                            imageLabel.repaint();
+                        }
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
+                }
+            }.execute();
 
-            JLabel nameLabel = new JLabel(item.getName());
-            nameLabel.setFont(new Font("Arial", Font.BOLD, 14));
+            String nameText = item.getName() + (count > 1 ? " (x" + count + ")" : "");
+            JLabel nameLabel = new JLabel(nameText);
+            nameLabel.setFont(new Font("Arial", Font.BOLD, 12));
             nameLabel.setForeground(Color.WHITE);
             nameLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
 
             JLabel idLabel = new JLabel("(ID: " + item.getId() + ")");
-            idLabel.setFont(new Font("Arial", Font.BOLD, 13));
+            idLabel.setFont(new Font("Arial", Font.BOLD, 11));
             idLabel.setForeground(Color.LIGHT_GRAY);
+            idLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
 
             JLabel typeLabel = new JLabel("Type: " + getItemType(item));
-            typeLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+            typeLabel.setFont(new Font("Arial", Font.PLAIN, 10));
             typeLabel.setForeground(Color.LIGHT_GRAY);
             typeLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
 
+            // Hent ekstra info fra wiki asynkront
+            JLabel extraInfoLabel = new JLabel();
+            extraInfoLabel.setFont(new Font("Arial", Font.PLAIN, 9));
+            extraInfoLabel.setForeground(Color.LIGHT_GRAY);
+            extraInfoLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
+            new SwingWorker<String, Void>() {
+                @Override
+                protected String doInBackground() throws Exception {
+                    return fetchWikiExtraInfo(item.getName());
+                }
+                @Override
+                protected void done() {
+                    try {
+                        String info = get();
+                        extraInfoLabel.setText(info);
+                        extraInfoLabel.revalidate();
+                        extraInfoLabel.repaint();
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
+                }
+            }.execute();
+
             JLabel priceLabel = new JLabel(getItemPrices(item.getId(), item));
-            priceLabel.setFont(new Font("Arial", Font.BOLD, 12));
+            priceLabel.setFont(new Font("Arial", Font.BOLD, 11));
             priceLabel.setForeground(Color.WHITE);
             priceLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 2, 0));
 
@@ -305,8 +398,9 @@ public class ItemPanel extends PluginPanel {
             textPanel.add(nameLabel);
             textPanel.add(Box.createVerticalStrut(2));
             textPanel.add(idLabel);
-            textPanel.add(Box.createVerticalStrut(5));
+            textPanel.add(Box.createVerticalStrut(2));
             textPanel.add(typeLabel);
+            textPanel.add(extraInfoLabel);
             textPanel.add(Box.createVerticalGlue());
             textPanel.add(priceLabel);
             textPanel.add(Box.createVerticalStrut(2));
@@ -316,15 +410,17 @@ public class ItemPanel extends PluginPanel {
 
             resultsPanel.add(itemPanel);
         }
+
         resultsPanel.revalidate();
         resultsPanel.repaint();
         resultsScrollPane.getViewport().revalidate();
         resultsScrollPane.getViewport().repaint();
+        SwingUtilities.invokeLater(() -> resultsScrollPane.repaint());
     }
 
     private String getItemPrices(int itemId, ItemComposition item) {
         if (isNotedItem(item) || isPlaceholderItem(item))
-            return "No price available";
+            return "";
         int gePrice = gePriceCache.getOrDefault(itemId, -1);
         int haPrice = alchPriceCache.getOrDefault(itemId, -1);
         return "G/E: " + formatPrice(gePrice) + " | HA: " + formatPrice(haPrice);
@@ -367,4 +463,65 @@ public class ItemPanel extends PluginPanel {
     private boolean isPlaceholderItem(ItemComposition item) { return item.getPlaceholderTemplateId() != -1; }
     private String getItemType(ItemComposition item) { return isNotedItem(item) ? "Noted" : "Normal"; }
     private String formatPrice(int price) { return price <= 0 ? "N/A" : String.format("%,d gp", price); }
+
+    /**
+     * Henter ekstra info fra OSRS Wiki for et gitt item (basert på item-navn).
+     * Returnerer for eksempel "(Untradable, Quest Item)" for items der prikkene er satt.
+     */
+    private String fetchWikiExtraInfo(String itemName) {
+        try {
+            if (wikiInfoCache.containsKey(itemName)) {
+                return wikiInfoCache.get(itemName);
+            }
+            String encodedName = URLEncoder.encode(itemName, "UTF-8");
+            String urlStr = "https://oldschool.runescape.wiki/api.php?action=query&format=json&titles=" + encodedName + "&prop=pageprops";
+            URL url = new URL(urlStr);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(url.openStream()));
+            StringBuilder jsonResult = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                jsonResult.append(line);
+            }
+            reader.close();
+            JSONObject json = new JSONObject(jsonResult.toString());
+            JSONObject query = json.getJSONObject("query");
+            JSONObject pages = query.getJSONObject("pages");
+            String extraInfo = "";
+            for (String key : pages.keySet()) {
+                JSONObject page = pages.getJSONObject(key);
+                if (page.has("pageprops")) {
+                    JSONObject props = page.getJSONObject("pageprops");
+                    if (props.has("infobox_item")) {
+                        String info = props.getString("infobox_item").toLowerCase();
+                        if (!info.contains("tradeable") || info.contains("no")) {
+                            extraInfo += "Untradable";
+                        }
+                        if (!info.contains("drop") && !info.contains("sell")) {
+                            if (!extraInfo.isEmpty()) extraInfo += ", ";
+                            extraInfo += "Quest Item";
+                        }
+                    }
+                }
+            }
+            if (!extraInfo.isEmpty()) {
+                extraInfo = "(" + extraInfo + ")";
+            }
+            wikiInfoCache.put(itemName, extraInfo);
+            return extraInfo;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * Pakk en knapp inn i et JPanel for å kontrollere størrelsen bedre.
+     */
+    private JPanel wrapButton(JButton button) {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.X_AXIS));
+        panel.setOpaque(false);
+        panel.setMaximumSize(button.getMaximumSize());
+        panel.add(button);
+        return panel;
+    }
 }
