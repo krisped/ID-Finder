@@ -62,6 +62,7 @@ public class FinderPlugin extends Plugin
         navButton = NavigationButton.builder()
                 .tooltip("Finder Plugin")
                 .icon(icon)
+                .priority(5)
                 .panel(mainPanel)
                 .build();
 
