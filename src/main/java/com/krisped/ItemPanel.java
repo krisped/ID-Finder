@@ -119,6 +119,7 @@ public class ItemPanel extends PluginPanel {
 
         add(topPanel, BorderLayout.NORTH);
 
+        // Midtdel: resultatpanel i en scroll
         resultsPanel = new JPanel();
         resultsPanel.setLayout(new GridLayout(0, 1));
         resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (0)"));
@@ -127,7 +128,7 @@ public class ItemPanel extends PluginPanel {
         resultsScrollPane.setPreferredSize(new Dimension(300, 500));
         add(resultsScrollPane, BorderLayout.CENTER);
 
-        // Bottom panel: Inneholder knappene
+        // Bunnpanel med knapper
         JPanel bottomPanel = new JPanel();
         bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
         bottomPanel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -241,15 +242,8 @@ public class ItemPanel extends PluginPanel {
         });
     }
 
-    /**
-     * Oppdaterer søkeresultatene.
-     * Her grupperes like items slik at for eksempel 20 Shark vises som "Shark (x20)",
-     * totalt antall items vises også i tittelen.
-     * I tillegg vises en ekstra linje med info hentet fra OSRS Wiki om itemet.
-     */
     private void updateResults(List<ItemComposition> items) {
         currentItems = new ArrayList<>(items);
-        // Sortering basert på valgt filter
         String selectedSort = (String) filterCombo.getSelectedItem();
         if(selectedSort != null) {
             switch(selectedSort) {
@@ -293,8 +287,6 @@ public class ItemPanel extends PluginPanel {
                     break;
             }
         }
-
-        // Gruppér items basert på ID
         Map<Integer, Integer> countMap = new LinkedHashMap<>();
         Map<Integer, ItemComposition> compMap = new LinkedHashMap<>();
         for (ItemComposition item : currentItems) {
@@ -304,7 +296,6 @@ public class ItemPanel extends PluginPanel {
                 compMap.put(id, item);
             }
         }
-        // Beregn totalt antall items (inkludert duplikater)
         int totalCount = 0;
         for (Integer count : countMap.values()) {
             totalCount += count;
@@ -312,7 +303,6 @@ public class ItemPanel extends PluginPanel {
         resultsPanel.setBorder(BorderFactory.createTitledBorder("Search Results (" + totalCount + ")"));
         resultsPanel.removeAll();
 
-        // For hver gruppe opprettes en rad
         for (Map.Entry<Integer, ItemComposition> entry : compMap.entrySet()) {
             int itemId = entry.getKey();
             ItemComposition item = entry.getValue();
@@ -323,7 +313,6 @@ public class ItemPanel extends PluginPanel {
             itemPanel.setPreferredSize(new Dimension(280, 85));
             itemPanel.setBackground(Color.DARK_GRAY);
 
-            // Ekstra venstrepadding for bildet
             JLabel imageLabel = new JLabel();
             imageLabel.setBorder(new EmptyBorder(0, 10, 0, 0));
             new SwingWorker<ImageIcon, Void>() {
@@ -363,7 +352,6 @@ public class ItemPanel extends PluginPanel {
             typeLabel.setForeground(Color.LIGHT_GRAY);
             typeLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
 
-            // Hent ekstra info fra wiki asynkront
             JLabel extraInfoLabel = new JLabel();
             extraInfoLabel.setFont(new Font("Arial", Font.PLAIN, 9));
             extraInfoLabel.setForeground(Color.LIGHT_GRAY);
@@ -410,7 +398,6 @@ public class ItemPanel extends PluginPanel {
 
             resultsPanel.add(itemPanel);
         }
-
         resultsPanel.revalidate();
         resultsPanel.repaint();
         resultsScrollPane.getViewport().revalidate();
@@ -441,15 +428,28 @@ public class ItemPanel extends PluginPanel {
         } catch (Exception ignored) {}
     }
 
+    // Her er loadGEPrices() oppdatert til å bruke JSONArray.names()
     private void loadGEPrices() {
         try {
             URL url = new URL("https://prices.runescape.wiki/api/v1/osrs/latest");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            JSONObject data = new JSONObject(reader.readLine()).getJSONObject("data");
+            JSONObject jsonObject = new JSONObject(reader.readLine());
             reader.close();
-            for (String key : data.keySet()) {
+
+            if (!jsonObject.has("data")) {
+                return;
+            }
+
+            JSONObject data = jsonObject.getJSONObject("data");
+            JSONArray keysArray = data.names();
+            if (keysArray == null) {
+                return;
+            }
+
+            for (int i = 0; i < keysArray.length(); i++) {
+                String key = keysArray.getString(i);
                 int id = Integer.parseInt(key);
                 JSONObject obj = data.getJSONObject(key);
                 gePriceCache.put(id, obj.optInt("high", -1));
@@ -459,15 +459,22 @@ public class ItemPanel extends PluginPanel {
         } catch (Exception ignored) {}
     }
 
-    private boolean isNotedItem(ItemComposition item) { return item.getNote() != -1; }
-    private boolean isPlaceholderItem(ItemComposition item) { return item.getPlaceholderTemplateId() != -1; }
-    private String getItemType(ItemComposition item) { return isNotedItem(item) ? "Noted" : "Normal"; }
-    private String formatPrice(int price) { return price <= 0 ? "N/A" : String.format("%,d gp", price); }
+    private boolean isNotedItem(ItemComposition item) {
+        return item.getNote() != -1;
+    }
 
-    /**
-     * Henter ekstra info fra OSRS Wiki for et gitt item (basert på item-navn).
-     * Returnerer for eksempel "(Untradable, Quest Item)" for items der prikkene er satt.
-     */
+    private boolean isPlaceholderItem(ItemComposition item) {
+        return item.getPlaceholderTemplateId() != -1;
+    }
+
+    private String getItemType(ItemComposition item) {
+        return isNotedItem(item) ? "Noted" : "Normal";
+    }
+
+    private String formatPrice(int price) {
+        return price <= 0 ? "N/A" : String.format("%,d gp", price);
+    }
+
     private String fetchWikiExtraInfo(String itemName) {
         try {
             if (wikiInfoCache.containsKey(itemName)) {
@@ -513,9 +520,6 @@ public class ItemPanel extends PluginPanel {
         }
     }
 
-    /**
-     * Pakk en knapp inn i et JPanel for å kontrollere størrelsen bedre.
-     */
     private JPanel wrapButton(JButton button) {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.X_AXIS));
